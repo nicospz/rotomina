@@ -1,94 +1,93 @@
-# Eevx adapter
+# Eevx management adapter
 
-This fork adds `/eevx` (linked from Settings). It manages already-enrolled Eevx
-scanners through the existing Mapping owner API; it does not install a scanner
-engine, modify Android encrypted preferences, or require Protomines for Eevx.
-Unclassified devices continue to use upstream MapWorld behavior.
+The `/eevx` page manages enrolled Eevx scanners through the Mapping owner API.
+Eevx remains independent of Rotomina and owns local scanner recovery. Devices
+without `scanner_type: eevx` keep upstream MapWorld behavior.
 
-## Setup
+## Renewable account connection
 
-1. Set `ROTOMINA_SESSION_SECRET` to a persistent random secret on the server.
-   The insecure upstream default was removed. Without this variable, a random
-   per-process secret is used and sessions expire on restart; use one server
-   process or configure the same secret for all processes.
-2. Set `EEVX_OWNER_TOKEN_FILE` to an absolute file path containing a current
-   **authenticated Mapping user access JWT**, with permissions `0600` or `0400`.
-   Mount this file read-only for Docker. Keep it outside this repository.
-   Obtain it through the existing Eevx account login/session flow; never use a
-   service-role key, phone agent credential, Rotom secret, or refresh token.
-   The file is reread per request, so an external authenticated session helper
-   can rotate it atomically. Automatic login/refresh is not implemented here.
-   Expired credentials fail closed. Never paste credentials into command lines,
-   Rotomina device configuration, or browser forms.
-3. Optional: set `EEVX_MAPPING_API_URL` to another trusted HTTPS Mapping owner
-   API base URL. The default is the existing Eevx `/functions/v1/store` endpoint.
-   Redirects and environment HTTP proxies are disabled for credential requests.
-4. Log into Rotomina, open Settings → Eevx scanners, and link an ADB serial or
-   host:port to its exact Mapping device UUID. This verifies account visibility
-   and records the binding without ADB setup, installation or scanner start.
-   Bare IPv4 addresses normalize to port 5555. Do not enroll the same hardware
-   under both its USB serial and network alias.
-5. Refresh the selected device before sending a command. Save worker count,
-   optionally change its name / saved Rotom connection UUID, or Start / Stop.
-   Create saved Rotom connections and secrets through the Mapping dashboard.
+Configure these server variables and mount a **private writable directory** for
+session storage (not a single bind-mounted file; rotation uses atomic rename):
 
-For existing MapWorld entries, stop Rotomina first and set `scanner_type` to
-`eevx` in the entry before restarting and completing the link. This prevents a
-live conversion while upstream installation/setup tasks may already be active.
-Back up config.json first. The adapter never detects scanner type by display
-name. Configure Eevx before enabling any legacy fleet automation.
+- `ROTOMINA_SESSION_SECRET`: persistent random session signing secret.
+- `EEVX_OWNER_SESSION_FILE`: e.g. `/run/eevx-session/owner.json`.
+- `EEVX_SUPABASE_ANON_KEY`: the public key from the Eevx site's `/api/config`.
+- `EEVX_SUPABASE_URL`: optional; defaults to the existing Eevx Supabase origin.
+- `EEVX_MAPPING_API_URL`: optional; defaults to the existing Mapping owner API.
 
-All Rotomina users share this server's Mapping owner access. Use a trusted
-single-owner deployment behind HTTPS; this is not per-user delegated OAuth.
-The owner token has the account's existing scope, not a newly invented scoped
-API credential. The adapter exposes only linked device operations and never
-retrieves Rotom tokens or agent credentials. A future scoped integration token
-would require backend support.
+Log into Rotomina, open Settings → Eevx scanners, then Connect account using the
+same verified Eevx email/password accepted by the APK. Passwords are transient.
+The server stores only the access and refresh tokens, with mode 0600. It renews
+on demand before expiry, serializes rotation across threads/processes using a
+sidecar lock, and atomically persists the replacement tokens. A lost refresh
+response or crash during rotation requires sign-in again, rather than blindly
+replaying an old refresh token. Revocation and account errors fail closed.
 
-## Behavior
+Use HTTPS or the private Tailscale deployment. All Rotomina admins share this
+owner session; this is not per-user delegated OAuth or a narrowly scoped service
+token. Never supply a service-role key or phone agent token. Legacy
+`EEVX_OWNER_TOKEN_FILE` remains supported when no session file is configured, but
+that access-token-only mode cannot renew itself.
 
-- GET `/mapping` finds exactly one UUID. Status exposes an allowlist of fields,
-  desired/observed state, revisions, workers and existing RPC counters. Samples
-  older than 30 seconds are `unknown`. Connected is not proof of useful scanning.
-- POST `/mapping/devices/{uuid}` uses the page's expected revision. Configuration
-  preserves the latest desired-running state. The server revision check resolves
-  races after the adapter's preflight read. Conflicts and uncertain/time-out
-  responses are never automatically retried. A duplicate command using an old
-  revision is rejected. Refresh before retrying.
-- An accepted revision is not observed completion. Refresh after the scanner's
-  next heartbeat to compare applied revision and observed state. Existing API
-  semantics apply: Stop does not permanently prohibit a later explicit Start.
-- Rotom online/memory retains upstream ingestion, but Eevx uses an exact control
-  origin (`LocalScanner-<Mapping name>`). Duplicate origins are unknown. A status
-  refresh resynchronizes the origin after a Mapping rename. Management identity
-  always uses UUID; Rotom does not expose that UUID in its existing origin.
-- Version probing uses `com.eevx.scanner`. Existing MapWorld config writes,
-  authorization, setup, UI automation, APK/game/module installs, cache clearing,
-  reboots and restart paths reject Eevx devices before executing device commands.
-  MapWorld's low-memory/offline restart loop skips Eevx. Local Eevx recovery stays
-  in charge. The legacy restart button is explicitly unavailable for Eevx.
-- New web mutations require both the Rotomina session and a CSRF token. Owner
-  credentials stay server-side; backend error bodies are not echoed.
+## Device setup and controls
 
-## Deliberate capability limits
+Link an ADB serial/host:port to its exact Mapping UUID on `/eevx`. Linking verifies
+account visibility without installing, connecting ADB, or starting the scanner.
+Bare IPv4 addresses normalize to port 5555. Do not register the same hardware
+under both its USB and network aliases. For an existing MapWorld entry, stop
+Rotomina and change its `scanner_type` to `eevx` before restarting and linking;
+this prevents migration during an in-flight legacy setup/install task.
 
-Coordinated Restart, APK/game updates, maintenance/drain, external recovery and
-performance switches are **not implemented**. The current Mapping API has no
-atomic maintenance transaction or guarded resume primitive. Implementing these
-as ordinary Stop/install/Start calls could override newer owner intent. Use the
-existing Eevx verified updater until that backend contract exists; do not use
-Rotomina's MapWorld updater. No weaker APK installation path was added.
+Refresh before Start, Stop, or configuration. Worker changes preserve current
+owner intent. Names and saved Rotom connection UUIDs are supported; create Rotom
+connections/secrets in the Mapping dashboard. Server revision checks reject stale
+commands. Accepted revisions are separate from observed completion. Unknown or
+older-than-30-second telemetry is shown explicitly.
 
-The adapter does not claim CPU/PSS, APK/runtime version, valid maps, or last-good
-RPC age in Mapping status: these fields are not currently exposed by that API.
-Rotomina's existing ADB version and Rotom memory reporting remain separate.
+Restart and Update require backend migration `202609200001_mapping_management`
+and an APK reporting `managementProtocol: 1` (Scanner 0.5.3+). Older APKs retain
+normal controls and are rejected for management operations.
+
+- **Restart:** allowed only when desired-running is true. The APK pauses, waits
+  for the scanner to stop and a 40-second cleanup grace, reports completion, then
+  obeys a fresh Mapping response. Rotomina never sends an independent Start.
+- **Update:** enter the exact version code published in the signed Eevx Scanner
+  release channel. The APK drains, downloads, and verifies the release signature,
+  APK SHA-256/size/package/version/signing certificate/min SDK and current game
+  compatibility before installation. Compatibility metadata comes from inside
+  the signed target APK. Root is required for unattended installation; generic
+  ADB APK installation and Android installer click automation are not used.
+- Each operation carries a client UUID and expected device revision. Duplicate
+  IDs are deduplicated by the database; newer owner commands cancel older work.
+  Installation is claimed once after fresh stopped/ready telemetry. Lost
+  responses are never automatically replayed. A dispatched package replacement
+  cannot be undone by Stop; Stop still cancels any subsequent resume.
+- Package replacement restarts the Mapping connection, not scanning directly.
+  The installed version confirms success. Failed, expired, unsupported or
+  incompatible updates stop owner intent and require an explicit decision.
+  The server never returns scanner credentials to the adapter.
+
+Use Operation status to inspect pending/draining/downloading/ready/installing/
+complete/failed/cancelled. Completion proves the requested restart drain or APK
+installation, not sustained scanning health. Confirm fresh observed state and
+useful RPC activity afterwards. No staged fleet rollout is automatic.
+
+Game updates and performance switches remain outside this adapter. MapWorld
+configuration, token distribution, APK/game/module installation, reboot and
+restart paths reject Eevx devices. The low-memory/offline watchdog leaves Eevx
+recovery in charge. Rotom online/memory uses an exact control origin; duplicate
+origins are unknown. Management always uses the stable Mapping UUID.
 
 ## Validation
 
-Run `python -m pip install -r requirements.txt pytest`, then
-`python -m pytest -q` and `python -m compileall -q main.py scanner_adapters`.
-Tests use HTTP fixtures and isolated legacy functions; they do not contact a
-Mapping server or phones. Coverage includes revision races, stopped-intent
-preservation, invalid controls, identity mismatch, stale status, secret
-redaction, timeouts, CSRF/login checks, binding and legacy side-effect guards.
-No fleet deployment or live device commands were performed for this change.
+`python -m pip install -r requirements.txt pytest`
+
+`python -m pytest -q`
+
+`python -m compileall -q main.py scanner_adapters`
+
+Tests cover owner-session rotation/concurrency, uncertain refresh responses,
+secret redaction, session/CSRF protection, revision conflicts, capability gating,
+operation request identity and legacy side-effect guards. Backend transaction
+and APK verification tests live in their respective repositories. Configure the
+backend and bootstrap APK before using new controls in production.

@@ -1,4 +1,5 @@
 """Eevx owner API adapter. Never uses Android agent or service-role credentials."""
+import asyncio
 import base64
 import json
 import os
@@ -6,6 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
+from .session import OwnerSession, SessionError
 
 import httpx
 
@@ -33,7 +35,8 @@ def public_status(device, now=None):
     observed = device.get('observed') or {}
     result['observed'] = {key: observed.get(key) for key in (
         'state', 'workers', 'connected', 'active', 'successfulRpc', 'failedRpc',
-        'restarts', 'lastRestartAt', 'error')}
+        'restarts', 'lastRestartAt', 'error', 'managementProtocol', 'appVersionCode',
+        'managementOperationId', 'managementState')}
     try:
         age = (time.time() if now is None else now) - datetime.fromisoformat(
             device['last_seen'].replace('Z', '+00:00')).timestamp()
@@ -44,6 +47,8 @@ def public_status(device, now=None):
     result['state'] = observed.get('state', 'unknown') if result['fresh'] else 'unknown'
     result['recovery_owner'] = 'eevx'
     result['capabilities'] = ['status', 'start', 'stop', 'configure']
+    if result['fresh'] and observed.get('managementProtocol') == 1:
+        result['capabilities'] += ['restart', 'update']
     return result
 
 
@@ -57,7 +62,7 @@ class EevxAdapter:
         self.transport = transport
 
     async def _request(self, method, path, body=None):
-        token = self.token_provider()
+        token = await asyncio.to_thread(self.token_provider)
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=False,
                                         transport=self.transport, trust_env=False) as client:
@@ -89,6 +94,22 @@ class EevxAdapter:
     async def status(self, mapping_id):
         return public_status(await self.device(mapping_id))
 
+    async def operation_status(self, mapping_id):
+        return await self._request('GET', '/mapping/devices/' + device_uuid(mapping_id) + '/operation')
+
+    async def operate(self, mapping_id, revision, operation_id, kind, version_code=None):
+        if type(revision) is not int or revision < 1 or kind not in ('restart', 'update'):
+            raise AdapterError('Choose a valid management operation and revision.', 400)
+        if kind == 'update' and (type(version_code) is not int or not 1 <= version_code <= 2147483647):
+            raise AdapterError('Choose the exact signed release version code.', 400)
+        if kind == 'restart' and version_code is not None:
+            raise AdapterError('Restart does not accept an APK version.', 400)
+        body = {'revision': revision, 'operationId': device_uuid(operation_id), 'kind': kind}
+        if kind == 'update':
+            body['versionCode'] = version_code
+        # Server deduplicates operationId. No automatic mutation retry on lost responses.
+        return await self._request('POST', '/mapping/devices/' + device_uuid(mapping_id) + '/operation', body)
+
     async def configure(self, mapping_id, revision, changes):
         if type(revision) is not int or revision < 1:
             raise AdapterError('Refresh to obtain a valid revision.', 400)
@@ -116,6 +137,11 @@ class EevxAdapter:
 
 def owner_token():
     """Read each time so an external login helper can atomically rotate the file."""
+    if os.environ.get('EEVX_OWNER_SESSION_FILE'):
+        try:
+            return renewable_session().token()
+        except SessionError as exc:
+            raise AdapterError(str(exc), 503) from None
     try:
         path = Path(os.environ['EEVX_OWNER_TOKEN_FILE'])
         if path.stat().st_mode & 0o077:
@@ -135,3 +161,12 @@ def owner_token():
 
 def from_environment():
     return EevxAdapter(owner_token, os.environ.get('EEVX_MAPPING_API_URL', DEFAULT_URL))
+
+
+def renewable_session():
+    try:
+        return OwnerSession(os.environ['EEVX_OWNER_SESSION_FILE'],
+            os.environ.get('EEVX_SUPABASE_URL', 'https://ygyaoulwimaknuebagjf.supabase.co'),
+            os.environ['EEVX_SUPABASE_ANON_KEY'])
+    except (KeyError, SessionError):
+        raise SessionError('Configure the private owner session file and public Supabase API key.') from None

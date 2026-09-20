@@ -1,8 +1,10 @@
 """Authenticated Eevx UI and routes, without starting Rotomina background tasks."""
+import asyncio
 import secrets
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from .eevx import AdapterError, device_uuid, from_environment
+from .eevx import AdapterError, device_uuid, from_environment, renewable_session
+from .session import SessionError
 
 
 def router(load_config, save_config, config_lock, templates):
@@ -58,6 +60,32 @@ def router(load_config, save_config, config_lock, templates):
                     if device.get('eevx_rotom_origin') != origin:
                         device['eevx_rotom_origin'] = origin
                         save_config(config)
+        return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+    @routes.post('/api/eevx/login')
+    async def login(request: Request):
+        authenticate(request, True)
+        body = await read_body(request)
+        email, password = body.get('email'), body.get('password')
+        if not isinstance(email, str) or not isinstance(password, str) or not email or not password:
+            raise AdapterError('Enter your Mapping email and password.', 400)
+        try:
+            await asyncio.to_thread(renewable_session().login, email, password)
+        except SessionError as exc:
+            raise AdapterError(str(exc), 403) from None
+        return JSONResponse({'connected': True}, headers={'Cache-Control': 'no-store'})
+
+    @routes.get('/api/eevx/operation')
+    async def operation_status(request: Request, ip: str):
+        authenticate(request)
+        return JSONResponse(await from_environment().operation_status(binding(ip)), headers={'Cache-Control': 'no-store'})
+
+    @routes.post('/api/eevx/operation')
+    async def operation(request: Request):
+        authenticate(request, True)
+        body = await read_body(request)
+        result = await from_environment().operate(binding(body.get('ip')), body.get('revision'),
+            body.get('operationId'), body.get('kind'), body.get('versionCode'))
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
     @routes.post('/api/eevx/bind')

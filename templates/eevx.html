@@ -2,12 +2,18 @@
 {% block content %}
 <h1 class="text-2xl font-bold mb-4">Eevx scanners</h1>
 <p class="mb-4">Start, stop and configuration use the Mapping dashboard owner. Eevx handles local recovery. Accepted commands may take a heartbeat to apply.</p>
+<form id="account" class="mb-6 flex gap-2 flex-wrap" autocomplete="off">
+<input name="email" type="email" placeholder="Mapping account email" required class="bg-gray-800 p-2 rounded">
+<input name="password" type="password" placeholder="Mapping password" required class="bg-gray-800 p-2 rounded">
+<button class="bg-blue-700 p-2 rounded">Connect account</button>
+</form>
+<p class="mb-4">The server renews the account session automatically. Your password is used only for sign-in.</p>
 <form id="link" class="mb-6 flex gap-2 flex-wrap">
 <input name="ip" placeholder="ADB serial or host:port" required class="bg-gray-800 p-2 rounded">
 <input name="mapping_id" placeholder="Mapping device UUID" required class="bg-gray-800 p-2 rounded">
 <button class="bg-blue-700 p-2 rounded">Link Eevx device</button>
 </form>
-<p class="mb-4">Link devices here before using other Rotomina controls. Linking does not start scanning. Server setup: <code>EEVX_OWNER_TOKEN_FILE</code> must point to a private, current Mapping owner session JWT.</p>
+<p class="mb-4">Link devices here before using other Rotomina controls. Linking does not start scanning. Server setup: configure a private writable session directory and the public Supabase API key.</p>
 <select id="device" class="bg-gray-800 p-2 rounded">
 <option value="">Select Eevx device</option>
 {% for device in devices if device.scanner_type == 'eevx' %}
@@ -24,8 +30,15 @@
 <button type="button" id="start" class="bg-green-800 p-2 rounded">Start</button>
 <button type="button" id="stop" class="bg-red-800 p-2 rounded">Stop</button>
 </form>
+<div class="flex flex-wrap gap-2 mt-4">
+<button id="restart" class="bg-gray-700 p-2 rounded">Restart scanner</button>
+<label>Signed APK version code <input id="version" type="number" min="1" class="bg-gray-800 p-2 w-24"></label>
+<button id="update" class="bg-gray-700 p-2 rounded">Update APK</button>
+<button id="operation-status" class="bg-gray-700 p-2 rounded">Operation status</button>
+</div>
+<pre id="operation" class="my-4 whitespace-pre-wrap"></pre>
 <p id="message" role="status" class="my-4"></p>
-<p>Restart and APK/game updates are unavailable until Mapping supports coordinated drain and maintenance. MapWorld setup, updates and recovery are disabled for linked Eevx devices.</p>
+<p>Management requires APK protocol 1. Restart preserves running intent. Updates require root and an exact version in the signed release channel; signature, hash and package checks run inside the APK. Failed updates stay stopped. Game updates remain disabled.</p>
 <script>
 (() => {
 const csrf = {{ csrf | tojson }};
@@ -55,6 +68,32 @@ async function command(changes) {
  const result = await call('control', {ip:old.ip, revision:old.revision, changes});
  el('message').textContent = 'Accepted revision ' + result.revision + '. Refresh to check observed completion.';
 }
+function operationId() {
+ const bytes = crypto.getRandomValues(new Uint8Array(16));
+ bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+ const hex = Array.from(bytes, b => b.toString(16).padStart(2,'0')).join('');
+ return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+}
+async function operate(kind) {
+ if (!snapshot || !snapshot.capabilities.includes(kind)) throw new Error('Refresh a scanner with management support first.');
+ const old = snapshot; snapshot = null;
+ const body = {ip:old.ip, revision:old.revision, operationId:operationId(), kind};
+ if (kind === 'update') body.versionCode = Number(el('version').value);
+ const result = await call('operation', body);
+ el('operation').textContent = JSON.stringify(result, null, 2);
+ el('message').textContent = 'Accepted. Check operation status for completion; no automatic command retries.';
+}
+el('restart').onclick = () => run(() => operate('restart'));
+el('update').onclick = () => run(() => operate('update'));
+el('operation-status').onclick = () => run(async () => {
+ el('operation').textContent = JSON.stringify(await call('operation?ip=' + encodeURIComponent(el('device').value)), null, 2);
+});
+el('account').onsubmit = event => { event.preventDefault(); run(async () => {
+ const values = Object.fromEntries(new FormData(event.target));
+ event.target.elements.password.value = '';
+ try { await call('login', values); el('message').textContent = 'Mapping account connected. Session renewal is automatic.'; }
+ finally { values.password = ''; }
+}); };
 el('refresh').onclick = () => run(refresh);
 el('device').onchange = () => { snapshot = null; el('status').textContent = ''; };
 el('start').onclick = () => run(() => command({running:true}));
