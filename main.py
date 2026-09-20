@@ -1,4 +1,7 @@
 import json
+import secrets
+from scanner_adapters.eevx import AdapterError
+from scanner_adapters.web import router as eevx_router
 import time
 import re
 import sys
@@ -376,7 +379,8 @@ class VersionManager:
             
             # Try MITM version
             try:
-                mitm_cmd = f'adb -s {device_id} shell "dumpsys package com.github.furtif.furtifformaps | grep versionName"'
+                scanner_package = "com.eevx.scanner" if is_eevx_device(device_id) else "com.github.furtif.furtifformaps"
+                mitm_cmd = f'adb -s {device_id} shell "dumpsys package {scanner_package} | grep versionName"'
                 mitm_result = subprocess.run(mitm_cmd, shell=True, capture_output=True, text=True, timeout=TimeoutConfig.MEDIUM)
                 if mitm_result.returncode == 0 and mitm_result.stdout:
                     mitm_match = re.search(r'versionName=(\d+\.\d+(?:\.\d+)?)', mitm_result.stdout)
@@ -1344,6 +1348,13 @@ def get_device_package_name(device_id: str) -> str:
         log(f"Error getting device package name, using default: {str(e)}", device_id, "CONFIG")
         return "com.nianticlabs.pokemongo"
 
+def is_eevx_device(device_id):
+    normalized = format_device_id(device_id)
+    return any(d.get("scanner_type") == "eevx" and
+               format_device_id(d.get("ip", "")) == normalized
+               for d in load_config().get("devices", []))
+
+
 def read_device_furtif_config(device_id: str) -> dict:
     """
     Reads the Furtif/Map World config from the device and extracts
@@ -1356,6 +1367,8 @@ def read_device_furtif_config(device_id: str) -> dict:
     Returns:
         dict: Dictionary containing the extracted config settings, empty dict on error
     """
+    if is_eevx_device(device_id):
+        return {}
     device_id = format_device_id(device_id)
     furtif_config = {}
 
@@ -1479,6 +1492,8 @@ def write_device_discord_token(device_id: str, token: str) -> Tuple[bool, str]:
         Tuple[bool, str]: (success, error_message)
         Special error: "INVALID_CONFIG_DELETED" means the config was deleted and needs recreation
     """
+    if is_eevx_device(device_id):
+        return False, "Eevx uses Mapping authorization."
     device_id = format_device_id(device_id)
     config_path = "/data/data/com.github.furtif.furtifformaps/files/config.json"
     
@@ -1594,6 +1609,8 @@ def write_device_furtif_config(device_id: str, config_updates: dict) -> Tuple[bo
         Tuple[bool, str]: (success, error_message)
         Special error: "INVALID_CONFIG_DELETED" means the config was deleted and needs recreation
     """
+    if is_eevx_device(device_id):
+        return False, "Configure Eevx on /eevx."
     device_id = format_device_id(device_id)
     config_path = "/data/data/com.github.furtif.furtifformaps/files/config.json"
 
@@ -1690,6 +1707,8 @@ async def ensure_device_token(device_id: str, max_retries: int = 3) -> Tuple[boo
     Returns:
         Tuple[bool, str, dict]: (success, error_message, furtif_config)
     """
+    if is_eevx_device(device_id):
+        return False, "Eevx uses Mapping authorization.", {}
     device_id = format_device_id(device_id)
     
     # Load the stored token from Rotomina config
@@ -1982,6 +2001,8 @@ async def stop_apps(device_id: str, stop_pogo: bool = True, stop_mapworld: bool 
     Returns:
         bool: True if stop commands succeeded, False otherwise
     """
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
 
     commands = []
@@ -2028,6 +2049,8 @@ async def optimized_app_start(device_id: str, run_login: bool = True) -> bool:
     Returns:
         bool: True if startup successful, False otherwise
     """
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     
     try:
@@ -2123,6 +2146,8 @@ async def optimized_login_sequence(device_id: str, max_retries: int = 3, furtif_
     Returns:
         bool: True if apps started successfully, False otherwise
     """
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     temp_dir = Path(tempfile.mkdtemp())
     
@@ -2791,6 +2816,8 @@ async def install_apk_for_device(device_id: str, apk_path: Path, apk_type: str =
     Returns:
         bool: True if installation successful
     """
+    if is_eevx_device(device_id):
+        return False
     try:
         device_id = format_device_id(device_id)
         
@@ -2862,6 +2889,8 @@ async def optimized_apk_installation(device_id: str, apk_files: list) -> tuple[b
     Returns:
         tuple: (success, error_message)
     """
+    if is_eevx_device(device_id):
+        return False, "Eevx update orchestration unavailable."
     device_id = format_device_id(device_id)
     
     try:
@@ -2934,6 +2963,8 @@ async def clear_app_cache(device_id: str) -> bool:
     Returns:
         bool: True if cache clearing was successful
     """
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     
     try:
@@ -2972,6 +3003,8 @@ async def uninstall_pogo(device_id: str) -> bool:
     Returns:
         bool: True if uninstallation was successful
     """
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     
     try:
@@ -3002,6 +3035,8 @@ async def uninstall_pogo(device_id: str) -> bool:
 
 async def reclaim_storage(device_id: str) -> bool:
     """Reclaims storage after uninstall by trimming caches and filesystem."""
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     try:
         log("Reclaiming storage via trim-caches and fstrim", device_id, "UPDATE")
@@ -3027,6 +3062,8 @@ async def reclaim_storage(device_id: str) -> bool:
 
 async def reboot_and_wait(device_id: str) -> bool:
     """Reboots device to reclaim storage after uninstall, waits for reconnect."""
+    if is_eevx_device(device_id):
+        return False
     device_id = format_device_id(device_id)
     try:
         log("Rebooting device to reclaim storage", device_id, "UPDATE")
@@ -3081,6 +3118,8 @@ async def optimized_perform_installation(device_ip: str, apk_path: Path, apk_typ
     Returns:
         bool: True if the complete process was successful
     """
+    if is_eevx_device(device_ip):
+        return False
     try:
         # Mark device as in update
         mark_device_in_update(device_ip, "pogo")
@@ -3294,6 +3333,8 @@ async def optimized_perform_installation(device_ip: str, apk_path: Path, apk_typ
 
 async def run_device_setup(setup_id: str, device_id: str, start_step: str = "adb_connect"):
     """Runs the device setup pipeline after adding a new device."""
+    if is_eevx_device(device_id):
+        return
     task = device_setup_tasks[setup_id]
 
     steps = ["adb_connect", "version_check", "pogo_setup", "mapworld_setup", "done"]
@@ -4159,6 +4200,8 @@ class MapWorldUpdater:
 
     async def install_mapworld(self, device_ip: str, force_install: bool = False) -> bool:
         """Optimized installation with version checking and better error handling"""
+        if is_eevx_device(device_ip):
+            return False
         try:
             # Get the latest APK
             current_apk = self.get_current_apk_path()
@@ -5152,6 +5195,8 @@ async def optimized_module_update_task():
 
 async def install_module_with_progress(device_ip: str, module_path=None, module_type="fork"):
     """Installs PlayIntegrityFork module with progress updates for the UI"""
+    if is_eevx_device(device_ip):
+        return False
     global update_in_progress, current_progress
     
     def cleanup_installation():
@@ -5487,6 +5532,9 @@ async def optimized_device_monitoring():
                     log("ADB not reachable, skipping monitoring", device_id, "MONITOR")
                     continue
                 
+                if is_eevx_device(device_id):
+                    continue  # Eevx owns local recovery; preserve monitoring only.
+
                 # Check if restart is needed
                 threshold = device.get("memory_threshold", 200)
                 restart_needed = False
@@ -5671,11 +5719,16 @@ async def update_api_status():
                 for api_device in api_data.get("devices", []):
                     origin = api_device.get("origin", "").lower()
                     # Try different matching approaches
-                    if (display_name and display_name in origin) or \
-                       (device_ip_for_matching and device_ip_for_matching in origin):
+                    if ((origin == dev.get("eevx_rotom_origin", "").lower()) if dev.get("scanner_type") == "eevx" else
+                        ((display_name and display_name in origin) or
+                         (device_ip_for_matching and device_ip_for_matching in origin))):
                         device_data = api_device
                         break
                 
+                if dev.get("scanner_type") == "eevx":
+                    exact_matches = [entry for entry in api_data.get("devices", [])
+                                     if entry.get("origin", "") == dev.get("eevx_rotom_origin")]
+                    device_data = exact_matches[0] if len(exact_matches) == 1 else None
                 if not device_data:
                     device_data = {}
                     log(f"No matching device data found for {device_id} in API response", device_id, "MONITOR")
@@ -6033,9 +6086,16 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key="CHANGE_ME_TO_A_SECURE_KEY")
+app.add_middleware(SessionMiddleware, secret_key=os.environ.get("ROTOMINA_SESSION_SECRET") or secrets.token_urlsafe(48))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+@app.exception_handler(AdapterError)
+async def eevx_error_handler(request, exc):
+    return JSONResponse({"error": str(exc)}, status_code=exc.status,
+                        headers={"Cache-Control": "no-store"})
+
+app.include_router(eevx_router(load_config, save_config, config_lock, templates))
 
 # Add template filters and globals
 templates.env.filters['format_memory'] = format_memory
@@ -6379,6 +6439,8 @@ async def save_device_token(request: Request, device_token: str = Form("")):
     devices = config.get("devices", [])
     if devices:
         for i, device in enumerate(devices):
+            if device.get("scanner_type") == "eevx":
+                continue
             if "furtif_config" not in device:
                 device["furtif_config"] = {}
             device["furtif_config"]["DiscordData"] = token
@@ -6399,6 +6461,8 @@ async def save_device_token(request: Request, device_token: str = Form("")):
 def get_device_rotom_config(request: Request, ip: str = ""):
     """Returns the current Rotom/Furtif config for a device.
     Reads live from the device via ADB; falls back to the stored config on error."""
+    if is_eevx_device(ip):
+        raise HTTPException(409, "Use /eevx for Eevx configuration.")
     if require_login(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -6437,6 +6501,8 @@ def save_device_rotom_config(
     PackageName: str = Form("com.nianticlabs.pokemongo"),
     restart_device: str = Form("off"),
 ):
+    if is_eevx_device(device_ip):
+        raise HTTPException(409, "Use /eevx for Eevx configuration.")
     if redirect := require_login(request):
         return redirect
 
@@ -6700,6 +6766,8 @@ async def pif_device_update(request: Request, device_ip: str = Form(...), versio
 
 @app.post("/mitm/device-update")
 async def mitm_device_update(request: Request, device_ip: str = Form(...), version: str = Form(...), apk_path: str = Form(...)):
+    if is_eevx_device(device_ip):
+        raise HTTPException(409, "Use the Eevx adapter; generic APK updates are disabled.")
     if redirect := require_login(request):
         return redirect
 
@@ -7349,6 +7417,8 @@ async def api_all_module_versions(request: Request):
 
 @app.post("/devices/restart-apps", response_class=HTMLResponse)
 async def restart_apps(request: Request, device_ip: str = Form(...)):
+    if is_eevx_device(device_ip):
+        raise HTTPException(409, "Eevx coordinated restart is not available. Use /eevx for Start/Stop.")
     if redirect := require_login(request):
         return redirect
     
@@ -7375,6 +7445,8 @@ async def restart_apps(request: Request, device_ip: str = Form(...)):
 
 @app.post("/devices/reboot", response_class=HTMLResponse)
 def reboot_device(request: Request, device_ip: str = Form(...)):
+    if is_eevx_device(device_ip):
+        raise HTTPException(409, "Coordinate Eevx maintenance before rebooting.")
     if redirect := require_login(request):
         return redirect
     
