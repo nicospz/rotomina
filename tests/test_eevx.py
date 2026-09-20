@@ -206,3 +206,46 @@ def test_rotom_identity_collisions_are_not_accepted():
     env['api_data']['devices'].append({'origin':'LocalScanner-phone'})
     exec(code,env)
     assert env['device_data'] is None
+
+
+def test_managed_operations_use_expected_revision_and_idempotency_id():
+    posts=[]
+    def handle(request):
+        assert request.method=='POST'
+        posts.append(json.loads(request.content))
+        return httpx.Response(200,json={'operation':{'id':ROTOM,'state':'pending'}})
+    asyncio.run(adapter(handle).operate(ID,7,ROTOM,'update',24))
+    assert posts==[dict(revision=7,operationId=ROTOM,kind='update',versionCode=24)]
+
+
+def test_management_capabilities_require_fresh_protocol_telemetry():
+    from datetime import datetime
+    current=datetime.fromisoformat(DEVICE['last_seen'].replace('Z','+00:00')).timestamp()
+    supported=dict(DEVICE,observed={'managementProtocol':1,'appVersionCode':24})
+    assert 'update' in public_status(supported,now=current)['capabilities']
+    assert 'update' not in public_status(supported,now=current+100)['capabilities']
+    assert 'update' not in public_status(DEVICE,now=current)['capabilities']
+
+
+def test_login_and_management_routes_require_csrf_and_do_not_return_session_secrets():
+    from fastapi import Request
+    config={'devices':[{'ip':'phone','scanner_type':'eevx','eevx_device_id':ID}]}
+    app=FastAPI();app.add_middleware(SessionMiddleware,secret_key='test-only')
+    @app.exception_handler(AdapterError)
+    async def error(request,exc):return JSONResponse({'error':str(exc)},status_code=exc.status)
+    @app.get('/test-login')
+    async def login(request:Request):
+        request.session['logged_in']=True;request.session['eevx_csrf']='csrf';return {}
+    app.include_router(router(lambda:config,lambda _:None,threading.RLock(),Jinja2Templates(directory='templates')))
+    client=TestClient(app);client.get('/test-login')
+    for path in ['login','operation']:
+        assert client.post('/api/eevx/'+path,json={}).status_code==403
+    with patch('scanner_adapters.web.renewable_session') as session:
+        result=client.post('/api/eevx/login',json={'email':'owner@test','password':'SECRET'},headers={'X-CSRF-Token':'csrf'})
+        assert result.json()=={'connected':True}
+        session.return_value.login.assert_called_once_with('owner@test','SECRET')
+        assert 'SECRET' not in result.text
+    fake=adapter(lambda r:httpx.Response(200,json={'operation':{'state':'pending'}}))
+    with patch('scanner_adapters.web.from_environment',return_value=fake):
+        result=client.post('/api/eevx/operation',json={'ip':'phone','revision':7,'operationId':ROTOM,'kind':'restart'},headers={'X-CSRF-Token':'csrf'})
+        assert result.status_code==200
