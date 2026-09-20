@@ -47,6 +47,15 @@ def router(load_config, save_config, config_lock, templates):
         return templates.TemplateResponse(request=request, name='eevx.html', context={'request': request,
             'devices': load_config().get('devices', []), 'csrf': request.session['eevx_csrf']})
 
+    @routes.get('/api/eevx/devices')
+    async def devices(request: Request):
+        authenticate(request)
+        available = await from_environment().devices()
+        linked = {d.get('eevx_device_id') for d in load_config().get('devices', [])
+                  if d.get('scanner_type') == 'eevx'}
+        return JSONResponse({'devices': [dict(d, linked=d['id'] in linked) for d in available]},
+                            headers={'Cache-Control': 'no-store'})
+
     @routes.get('/api/eevx/status')
     async def status(request: Request, ip: str):
         authenticate(request)
@@ -92,22 +101,30 @@ def router(load_config, save_config, config_lock, templates):
     async def bind(request: Request):
         authenticate(request, True)
         body = await read_body(request)
-        ip = body.get('ip')
+        ip = body.get('ip', '')
         mapping_id = device_uuid(body.get('mapping_id'))
         current = await from_environment().status(mapping_id)
         # Explicit registration avoids upstream's automatic MapWorld setup pipeline.
-        if not isinstance(ip, str) or not ip or len(ip) > 100 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_' for c in ip):
+        if not isinstance(ip, str) or len(ip) > 100 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_' for c in ip):
             raise AdapterError('Enter an ADB serial or host:port.', 400)
         import re
         if re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', ip):
             ip += ':5555'
         with config_lock:
             config = load_config()
+            # Keep existing ADB bindings stable when linking again from the picker.
+            existing = next((d for d in config['devices']
+                             if d.get('eevx_device_id') == mapping_id
+                             and d.get('scanner_type') == 'eevx'), None)
+            if not ip:
+                ip = existing['ip'] if existing else 'eevx-' + mapping_id
             if any(d.get('eevx_device_id') == mapping_id and d.get('ip') != ip for d in config.get('devices', [])):
                 raise AdapterError('This Mapping identity is already linked.', 409)
             target = next((d for d in config['devices'] if d.get('ip') == ip), None)
             if target is not None and target.get('scanner_type') != 'eevx':
                 raise AdapterError('Existing MapWorld entry: migrate its scanner_type while Rotomina is stopped; see docs/eevx.md.', 409)
+            if target is not None and target.get('eevx_device_id') not in (None, mapping_id):
+                raise AdapterError('This address is linked to another Mapping device.', 409)
             if target is None:
                 target = {'ip': ip}
                 config['devices'].append(target)

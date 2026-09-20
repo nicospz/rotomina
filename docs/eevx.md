@@ -31,7 +31,12 @@ that access-token-only mode cannot renew itself.
 
 ## Device setup and controls
 
-Link an ADB serial/host:port to its exact Mapping UUID on `/eevx`. Linking verifies
+On `/eevx`, connect your Mapping account, select a device from the account list,
+and click Link Eevx device. No UUID copying or ADB connection is required. The
+optional ADB address can associate an existing hardware address; otherwise a
+stable `eevx-<Mapping UUID>` record is created. Existing bindings are preserved
+when relinking without an address. Linked devices are marked in the picker.
+Linking verifies
 account visibility without installing, connecting ADB, or starting the scanner.
 Bare IPv4 addresses normalize to port 5555. Do not register the same hardware
 under both its USB and network aliases. For an existing MapWorld entry, stop

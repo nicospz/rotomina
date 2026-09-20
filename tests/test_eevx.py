@@ -249,3 +249,53 @@ def test_login_and_management_routes_require_csrf_and_do_not_return_session_secr
     with patch('scanner_adapters.web.from_environment',return_value=fake):
         result=client.post('/api/eevx/operation',json={'ip':'phone','revision':7,'operationId':ROTOM,'kind':'restart'},headers={'X-CSRF-Token':'csrf'})
         assert result.status_code==200
+
+
+def test_account_discovery_and_adb_free_linking():
+    config = {'devices': []}
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key='test-only')
+    @app.exception_handler(AdapterError)
+    async def error(request, exc):
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+    @app.get('/test-login')
+    async def login(request: __import__('fastapi').Request):
+        request.session.update(logged_in=True, eevx_csrf='csrf')
+        return {}
+    app.include_router(router(lambda: copy.deepcopy(config), lambda c: config.update(c),
+                              threading.RLock(), Jinja2Templates(directory='templates')))
+    client = TestClient(app)
+    assert client.get('/api/eevx/devices').status_code == 401
+    client.get('/test-login')
+    headers = {'X-CSRF-Token': 'csrf'}
+    def handle(request):
+        assert request.method == 'GET'  # Discovery/linking never commands the scanner.
+        return httpx.Response(200, json={'devices': [dict(DEVICE, agent_token='SECRET'),
+            dict(DEVICE, id=ROTOM, revoked=True)], 'secret': 'SECRET'})
+    with patch('scanner_adapters.web.from_environment', return_value=adapter(handle)):
+        response = client.get('/api/eevx/devices')
+        assert response.json() == {'devices': [{'id': ID, 'name': 'phone', 'linked': False}]}
+        assert response.headers['cache-control'] == 'no-store'
+        assert 'SECRET' not in response.text
+        assert client.post('/api/eevx/bind', json={'mapping_id': ID}).status_code == 403
+        assert client.post('/api/eevx/bind', json={'mapping_id': ROTOM[::-1]}, headers=headers).status_code == 404
+        for body in ({'mapping_id': ID}, {'mapping_id': ID, 'ip': ''}):
+            assert client.post('/api/eevx/bind', json=body, headers=headers).status_code == 200
+        assert len(config['devices']) == 1
+        assert config['devices'][0]['ip'] == 'eevx-' + ID
+        assert config['devices'][0]['control_enabled'] is False
+        assert client.get('/api/eevx/status', params={'ip': 'eevx-' + ID}).json()['id'] == ID
+        assert client.get('/api/eevx/devices').json()['devices'][0]['linked'] is True
+        # Relinking from discovery preserves an existing ADB address.
+        config['devices'][0]['ip'] = 'phone:5555'
+        assert client.post('/api/eevx/bind', json={'mapping_id': ID}, headers=headers).status_code == 200
+        assert config['devices'][0]['ip'] == 'phone:5555'
+        assert len(config['devices']) == 1
+        # Do not silently replace another device's identity or a MapWorld record.
+        config['devices'][0]['eevx_device_id'] = ROTOM
+        assert client.post('/api/eevx/bind', json={'mapping_id': ID, 'ip': 'phone:5555'}, headers=headers).status_code == 409
+        config['devices'][0]['scanner_type'] = 'mapworld'
+        assert client.post('/api/eevx/bind', json={'mapping_id': ID, 'ip': 'phone:5555'}, headers=headers).status_code == 409
+        page = client.get('/eevx').text
+        assert 'id="available-devices"' in page
+        assert 'name="ip" placeholder="ADB serial or host:port" required' not in page
