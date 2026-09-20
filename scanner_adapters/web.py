@@ -42,7 +42,7 @@ def router(load_config, save_config, config_lock, templates):
     async def page(request: Request):
         authenticate(request)
         request.session.setdefault('eevx_csrf', secrets.token_urlsafe(32))
-        return templates.TemplateResponse('eevx.html', {'request': request,
+        return templates.TemplateResponse(request=request, name='eevx.html', context={'request': request,
             'devices': load_config().get('devices', []), 'csrf': request.session['eevx_csrf']})
 
     @routes.get('/api/eevx/status')
