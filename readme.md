@@ -1,3 +1,5 @@
+> **Eevx fork:** This fork adds an optional Mapping owner API adapter. See [Eevx setup and supported controls](docs/eevx.md).
+
 # Rotomina
 
 A comprehensive web-based management and monitoring tool for Android devices with MITM and PlayIntegrityFix support, designed for Pokemon GO automation and management.

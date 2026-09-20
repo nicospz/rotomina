@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Eevx scanners</h1>
+<p class="mb-4">Start, stop and configuration use the Mapping dashboard owner. Eevx handles local recovery. Accepted commands may take a heartbeat to apply.</p>
+<form id="link" class="mb-6 flex gap-2 flex-wrap">
+<input name="ip" placeholder="ADB serial or host:port" required class="bg-gray-800 p-2 rounded">
+<input name="mapping_id" placeholder="Mapping device UUID" required class="bg-gray-800 p-2 rounded">
+<button class="bg-blue-700 p-2 rounded">Link Eevx device</button>
+</form>
+<p class="mb-4">Link devices here before using other Rotomina controls. Linking does not start scanning. Server setup: <code>EEVX_OWNER_TOKEN_FILE</code> must point to a private, current Mapping owner session JWT.</p>
+<select id="device" class="bg-gray-800 p-2 rounded">
+<option value="">Select Eevx device</option>
+{% for device in devices if device.scanner_type == 'eevx' %}
+<option value="{{ device.ip }}">{{ device.display_name }} ({{ device.ip }})</option>
+{% endfor %}
+</select>
+<button id="refresh" class="bg-gray-700 p-2 rounded">Refresh</button>
+<pre id="status" class="my-4 whitespace-pre-wrap"></pre>
+<form id="configure" class="flex flex-wrap gap-2">
+<label>Workers <input id="workers" type="number" min="1" max="1000" required class="bg-gray-800 p-2 w-24"></label>
+<label>Name <input id="name" maxlength="80" class="bg-gray-800 p-2"></label>
+<label>Saved Rotom UUID <input id="rotom" class="bg-gray-800 p-2"></label>
+<button class="bg-blue-700 p-2 rounded">Save configuration</button>
+<button type="button" id="start" class="bg-green-800 p-2 rounded">Start</button>
+<button type="button" id="stop" class="bg-red-800 p-2 rounded">Stop</button>
+</form>
+<p id="message" role="status" class="my-4"></p>
+<p>Restart and APK/game updates are unavailable until Mapping supports coordinated drain and maintenance. MapWorld setup, updates and recovery are disabled for linked Eevx devices.</p>
+<script>
+(() => {
+const csrf = {{ csrf | tojson }};
+const el = id => document.getElementById(id);
+let snapshot = null;
+async function call(path, body) {
+ const response = await fetch('/api/eevx/' + path, body ? {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)} : {});
+ const data = await response.json();
+ if (!response.ok) throw new Error(data.error || 'Request failed');
+ return data;
+}
+async function run(action) { try { el('message').textContent = ''; await action(); } catch(e) { el('message').textContent = e.message; } }
+async function refresh() {
+ snapshot = null;
+ const ip = el('device').value;
+ const data = await call('status?ip=' + encodeURIComponent(ip));
+ if (el('device').value !== ip) return;
+ snapshot = {...data, ip};
+ el('status').textContent = JSON.stringify(data, null, 2);
+ el('workers').value = data.workers;
+ el('name').value = data.name;
+ el('rotom').value = data.rotom_id || '';
+}
+async function command(changes) {
+ if (!snapshot || snapshot.ip !== el('device').value) throw new Error('Refresh the device first.');
+ const old = snapshot; snapshot = null;
+ const result = await call('control', {ip:old.ip, revision:old.revision, changes});
+ el('message').textContent = 'Accepted revision ' + result.revision + '. Refresh to check observed completion.';
+}
+el('refresh').onclick = () => run(refresh);
+el('device').onchange = () => { snapshot = null; el('status').textContent = ''; };
+el('start').onclick = () => run(() => command({running:true}));
+el('stop').onclick = () => run(() => command({running:false}));
+el('configure').onsubmit = event => { event.preventDefault(); run(() => {
+ const changes = {workers:Number(el('workers').value)};
+ if (snapshot && (el('name').value !== snapshot.name || el('rotom').value !== (snapshot.rotom_id || ''))) {
+ changes.name = el('name').value; changes.rotomId = el('rotom').value;
+ }
+ return command(changes);
+}); };
+el('link').onsubmit = event => { event.preventDefault(); run(async () => { await call('bind', Object.fromEntries(new FormData(event.target))); location.reload(); }); };
+})();
+</script>
+{% endblock %}
