@@ -7,7 +7,7 @@ from .eevx import AdapterError, device_uuid, from_environment, renewable_session
 from .session import SessionError
 
 
-def router(load_config, save_config, config_lock, templates):
+def router(load_config, save_config, config_lock, templates, status_cache=None):
     routes = APIRouter()
 
     def authenticate(request, mutation=False):
@@ -46,6 +46,27 @@ def router(load_config, save_config, config_lock, templates):
         request.session.setdefault('eevx_csrf', secrets.token_urlsafe(32))
         return templates.TemplateResponse(request=request, name='eevx.html', context={'request': request,
             'devices': load_config().get('devices', []), 'csrf': request.session['eevx_csrf']})
+
+    @routes.get('/api/eevx/fleet')
+    async def fleet(request: Request):
+        authenticate(request)
+        linked = [d for d in load_config().get('devices', []) if d.get('scanner_type') == 'eevx']
+        if not linked:
+            return JSONResponse({'devices': []}, headers={'Cache-Control': 'no-store'})
+        statuses = await from_environment().statuses()
+        result = []
+        import time
+        for device in linked:
+            matches = [s for s in statuses if s.get('id') == device.get('eevx_device_id')]
+            snapshot = matches[0] if len(matches) == 1 else {
+                'id': device.get('eevx_device_id'), 'name': device.get('display_name'),
+                'fresh': False, 'state': 'unavailable', 'observed': {}}
+            cached = (status_cache or {}).get(device['ip'], {})
+            rotom_fresh = time.time() - cached.get('last_update', 0) <= 30
+            result.append(dict(snapshot, ip=device['ip'],
+                mem_free=cached.get('mem_free') if rotom_fresh else None,
+                runtime=cached.get('runtime') if rotom_fresh else None))
+        return JSONResponse({'devices': result}, headers={'Cache-Control': 'no-store'})
 
     @routes.get('/api/eevx/devices')
     async def devices(request: Request):

@@ -1225,6 +1225,8 @@ def check_adb_connection(device_id: str) -> tuple[bool, str]:
     Returns:
         tuple: (is_connected, error_message)
     """
+    if is_eevx_device(device_id):
+        return False, "ADB is not required for Eevx management."
     device_id = format_device_id(device_id)
     is_network_device = ":" in device_id and all(c.isdigit() or c == '.' or c == ':' for c in device_id)
     
@@ -1837,6 +1839,9 @@ def get_device_details(device_id: str) -> dict:
             "mitm_version": "N/A",
             "module_version": "N/A"
         }
+
+        if device.get("scanner_type") == "eevx":
+            return details
 
         # Check if furtif_config is already stored
         stored_furtif_config = device.get("furtif_config", {})
@@ -5800,7 +5805,9 @@ async def update_api_status():
                 adb_error = ""
                 
                 # Only check ADB connection if device is alive or for devices needing status check
-                if is_alive or not current_cache.get("adb_status", False):
+                if dev.get("scanner_type") == "eevx":
+                    adb_status, adb_error = False, ""
+                elif is_alive or not current_cache.get("adb_status", False):
                     adb_status, adb_error = check_adb_connection(device_id)
                 else:
                     # Reuse last status if device is offline
@@ -5839,7 +5846,8 @@ async def update_api_status():
                     current_runtime = 0  # Just started
                     
                     # Force version refresh
-                    version_manager.mark_for_refresh(device_id)
+                    if dev.get("scanner_type") != "eevx":
+                        version_manager.mark_for_refresh(device_id)
                 
                 # Handle online to offline transition as well
                 elif not is_alive and prev_is_alive:
@@ -5976,6 +5984,7 @@ async def get_status_data(apk_type: str = "google"):
             update_info = f"{update_type} ({update_duration}s)"
         
         devices.append({
+            "scanner_type": dev.get("scanner_type", "mapworld"),
             "display_name": details.get("display_name", ip.split(":")[0]),
             "ip": ip,
             "status": status.get("adb_status", False),
@@ -6095,7 +6104,7 @@ async def eevx_error_handler(request, exc):
     return JSONResponse({"error": str(exc)}, status_code=exc.status,
                         headers={"Cache-Control": "no-store"})
 
-app.include_router(eevx_router(load_config, save_config, config_lock, templates))
+app.include_router(eevx_router(load_config, save_config, config_lock, templates, device_status_cache))
 
 # Add template filters and globals
 templates.env.filters['format_memory'] = format_memory
@@ -6312,6 +6321,7 @@ async def status_page(request: Request, apk_type: str = "google"):
         mem_free_value = status.get("mem_free", 0)
         
         devices.append({
+            "scanner_type": dev.get("scanner_type", "mapworld"),
             "display_name": details.get("display_name", ip.split(":")[0]),
             "ip": ip,
             "status": check_adb_connection(ip)[0],

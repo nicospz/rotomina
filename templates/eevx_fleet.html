@@ -1,0 +1,58 @@
+<section x-data="eevxFleet()" class="mb-6" aria-label="Eevx scanner status">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div>
+            <h2 class="text-xl font-semibold">Eevx scanners</h2>
+            <p class="text-sm text-gray-400">Live Mapping telemetry · refreshes every 15 seconds · recovery managed by Eevx</p>
+        </div>
+        <a href="/eevx" class="bg-blue-700 px-3 py-2 rounded">Manage scanners</a>
+    </div>
+    <p x-show="error" x-text="error" role="status" class="text-yellow-300 mb-3"></p>
+    <p x-show="!rows.length && !error" class="text-gray-400" x-text="loading ? 'Loading scanner status…' : 'No Eevx devices linked. Use Manage scanners to add them.'"></p>
+    <div class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));">
+        <template x-for="d in rows" :key="d.id">
+            <article class="bg-dark-800 border border-gray-700 rounded-lg p-4">
+                <div class="flex justify-between gap-2">
+                    <h3 class="font-semibold" x-text="d.name"></h3>
+                    <span :class="fresh(d) ? 'text-green-400' : 'text-yellow-300'" x-text="fresh(d) ? d.state : 'Telemetry unavailable'"></span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1" style="overflow-wrap:anywhere" x-text="d.id"></div>
+                <p class="text-xs text-gray-400 mt-2" x-text="'Last heartbeat: ' + (d.last_seen ? new Date(d.last_seen).toLocaleString() : 'Never reported')"></p>
+                <dl class="grid grid-cols-2 gap-3 mt-4 text-sm">
+                    <div><dt class="text-gray-400">Desired state</dt><dd x-text="d.desired_running == null ? 'Unknown' : (d.desired_running ? 'Running' : 'Stopped')"></dd></div>
+                    <div><dt class="text-gray-400">Configuration</dt><dd x-text="d.revision == null ? 'Unknown' : (d.revision > d.applied_revision ? 'Pending application' : 'Applied')"></dd></div>
+                    <div><dt class="text-gray-400">Workers active / connected / configured</dt><dd x-text="metric(d, 'active') + ' / ' + metric(d, 'connected') + ' / ' + (d.workers ?? '—')"></dd></div>
+                    <div><dt class="text-gray-400">Scanner APK code</dt><dd x-text="d.observed.appVersionCode ?? 'Not reported'"></dd></div>
+                    <div><dt class="text-gray-400">Successful RPCs (reported total)</dt><dd x-text="metric(d, 'successfulRpc')"></dd></div>
+                    <div><dt class="text-gray-400">Failed RPCs (reported total)</dt><dd x-text="metric(d, 'failedRpc')"></dd></div>
+                    <div><dt class="text-gray-400">Free device memory (Rotom)</dt><dd x-text="!error && d.mem_free != null && d.mem_free > 0 ? (d.mem_free / 1048576).toFixed(2) + ' GB' : 'Unavailable'"></dd></div>
+                    <div><dt class="text-gray-400">Automatic restarts (reported total)</dt><dd x-text="metric(d, 'restarts')"></dd></div>
+                </dl>
+                <p x-show="fresh(d) && d.observed.error" x-text="d.observed.error" class="text-red-400 text-sm mt-3" style="overflow-wrap:anywhere"></p>
+                <a :href="'/eevx?device=' + encodeURIComponent(d.ip)" class="inline-block text-blue-400 mt-3">Open controls →</a>
+            </article>
+        </template>
+    </div>
+</section>
+<script>
+function eevxFleet() {
+    return {
+        rows: [], loading: true, error: '', timer: null, busy: false,
+        init() { this.refresh(); this.timer = setInterval(() => this.refresh(), 15000); },
+        destroy() { clearInterval(this.timer); },
+        fresh(d) { return !this.error && d.fresh && d.last_seen && Date.now() - Date.parse(d.last_seen) <= 30000; },
+        metric(d, key) { return this.fresh(d) && d.observed[key] != null ? Number(d.observed[key]).toLocaleString() : '—'; },
+        async refresh() {
+            if (this.busy) return;
+            this.busy = true;
+            try {
+                const response = await fetch('/api/eevx/fleet');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Scanner telemetry unavailable');
+                this.rows = data.devices;
+                this.error = '';
+            } catch (e) { this.error = e.message; }
+            finally { this.loading = false; this.busy = false; }
+        }
+    };
+}
+</script>
