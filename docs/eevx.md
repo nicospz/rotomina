@@ -96,3 +96,14 @@ secret redaction, session/CSRF protection, revision conflicts, capability gating
 operation request identity and legacy side-effect guards. Backend transaction
 and APK verification tests live in their respective repositories. Configure the
 backend and bootstrap APK before using new controls in production.
+
+## Fleet overview
+
+The status page shows Eevx cards separately from legacy ADB/MapWorld rows.
+A single Mapping request fetches the linked fleet every 15 seconds per open page.
+Cards show observed state, desired state, revision application, worker counts,
+reported RPC totals (not rates), APK version code, restart counts and heartbeat
+age. Telemetry older than 30 seconds or failed requests is unavailable. Free device
+memory comes from Rotom and is hidden when its status cache is stale. Missing
+APK telemetry is labelled Not reported. Open controls selects that device on /eevx.
+Eevx status/detail checks skip ADB and legacy version discovery.

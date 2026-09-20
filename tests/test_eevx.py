@@ -299,3 +299,50 @@ def test_account_discovery_and_adb_free_linking():
         page = client.get('/eevx').text
         assert 'id="available-devices"' in page
         assert 'name="ip" placeholder="ADB serial or host:port" required' not in page
+
+
+def test_fleet_uses_one_request_redacts_and_filters_to_linked_devices():
+    import time
+    config = {'devices': [{'ip': 'eevx-' + ID, 'scanner_type': 'eevx',
+                           'eevx_device_id': ID, 'display_name': 'phone'}]}
+    cache = {'eevx-' + ID: {'last_update': time.time(), 'mem_free': 2048, 'runtime': 60}}
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key='test')
+    @app.exception_handler(AdapterError)
+    async def error(request, exc):
+        return JSONResponse({'error': str(exc)}, status_code=exc.status)
+    @app.get('/test-login')
+    async def login(request: __import__('fastapi').Request):
+        request.session['logged_in'] = True
+        return {}
+    app.include_router(router(lambda: config, lambda _: None, threading.RLock(),
+                              Jinja2Templates(directory='templates'), cache))
+    client = TestClient(app)
+    assert client.get('/api/eevx/fleet').status_code == 401
+    client.get('/test-login')
+    calls = []
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json={'devices': [dict(DEVICE, agent_token='SECRET'),
+                                                      dict(DEVICE, id=ROTOM)]})
+    with patch('scanner_adapters.web.from_environment', return_value=adapter(handle)):
+        response = client.get('/api/eevx/fleet')
+        assert len(calls) == 1
+        assert 'SECRET' not in response.text
+        rows = response.json()['devices']
+        assert len(rows) == 1 and rows[0]['id'] == ID
+        assert rows[0]['mem_free'] == 2048
+        assert rows[0]['fresh'] is False and rows[0]['state'] == 'unknown'
+        cache['eevx-' + ID]['last_update'] = 0
+        assert client.get('/api/eevx/fleet').json()['devices'][0]['mem_free'] is None
+        config['devices'][0]['eevx_device_id'] = 'unavailable'
+        assert client.get('/api/eevx/fleet').json()['devices'][0]['state'] == 'unavailable'
+
+
+def test_eevx_adb_status_check_returns_without_adb():
+    tree = ast.parse(Path('main.py').read_text())
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'check_adb_connection')
+    fn.decorator_list = []
+    env = {'is_eevx_device': lambda _: True}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), 'main.py', 'exec'), env)
+    assert env['check_adb_connection']('eevx-' + ID) == (False, 'ADB is not required for Eevx management.')

@@ -82,6 +82,12 @@ class EevxAdapter:
         except ValueError:
             raise AdapterError('Invalid Mapping response.') from None
 
+    async def statuses(self):
+        data = await self._request('GET', '/mapping')
+        if not isinstance(data, dict) or not isinstance(data.get('devices'), list):
+            raise AdapterError('Invalid Mapping device list.')
+        return [public_status(d) for d in data['devices'] if isinstance(d, dict)]
+
     async def devices(self):
         data = await self._request('GET', '/mapping')
         if not isinstance(data, dict) or not isinstance(data.get('devices'), list):

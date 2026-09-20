@@ -124,6 +124,11 @@ el('configure').onsubmit = event => { event.preventDefault(); run(() => {
  return command(changes);
 }); };
 el('link').onsubmit = event => { event.preventDefault(); run(async () => { await call('bind', Object.fromEntries(new FormData(event.target))); location.reload(); }); };
+const requestedDevice = new URLSearchParams(location.search).get('device');
+if (requestedDevice && Array.from(el('device').options).some(o => o.value === requestedDevice)) {
+ el('device').value = requestedDevice;
+ run(refresh);
+}
 run(loadDevices);
 })();
 </script>

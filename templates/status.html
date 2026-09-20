@@ -29,7 +29,7 @@
 
         <div class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-3">
             <!-- APK Type Selector with Version -->
-            <div class="relative flex items-center gap-2">
+            <div x-show="devices.some(d => d.scanner_type !== 'eevx')" class="relative flex items-center gap-2">
                 <select x-model="apkType" @change="changeApkType()"
                     class="appearance-none border text-white text-sm rounded-md px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:border-blue-500"
                     :class="apkType === 'google' ? 'bg-blue-900/50 border-blue-600 focus:ring-blue-500' : 'bg-purple-900/50 border-purple-600 focus:ring-purple-500'">
@@ -43,7 +43,7 @@
                 </div>
             </div>
 
-            <button type="button" @click="pogoUpdateAll()"
+            <button x-show="devices.some(d => d.scanner_type !== 'eevx')" type="button" @click="pogoUpdateAll()"
                 class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
                 <span>PoGo Update All</span>
             </button>
@@ -61,7 +61,7 @@
     </div>
 
     <!-- Update status indicators -->
-    <div class="flex flex-col sm:flex-row sm:justify-end mb-4">
+    <div x-show="devices.some(d => d.scanner_type !== 'eevx')" class="flex flex-col sm:flex-row sm:justify-end mb-4">
         <div class="flex flex-col sm:flex-row gap-2 sm:gap-2 w-full sm:w-auto">
             <span
                 class="inline-flex items-center justify-between px-3 py-1 rounded-md text-sm font-medium w-full sm:w-auto"
@@ -77,9 +77,11 @@
         </div>
     </div>
 
+    {% include "eevx_fleet.html" %}
+
     <!-- Mobile cards (sm and down) -->
-    <div class="md:hidden space-y-3">
-        <template x-for="device in sortedDevices" :key="device.ip">
+    <div class="md:hidden space-y-3" x-show="devices.some(d => d.scanner_type !== 'eevx')">
+        <template x-for="device in sortedDevices.filter(d => d.scanner_type !== 'eevx')" :key="device.ip">
             <div class="bg-dark-800 border border-gray-700 rounded-lg p-4">
                 <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
@@ -245,7 +247,7 @@
     </div>
 
     <!-- Devices table -->
-    <div class="hidden md:block bg-dark-800 overflow-hidden shadow rounded-lg">
+    <div x-show="devices.some(d => d.scanner_type !== 'eevx')" class="hidden md:block bg-dark-800 overflow-hidden shadow rounded-lg">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-700">
                 <thead class="bg-dark-800">
@@ -387,7 +389,7 @@
                     </tr>
                 </thead>
                 <tbody class="bg-dark-800 divide-y divide-gray-700">
-                    <template x-for="device in sortedDevices" :key="device.ip">
+                    <template x-for="device in sortedDevices.filter(d => d.scanner_type !== 'eevx')" :key="device.ip">
                         <tr class="hover:bg-gray-800/70 transition-colors">
                             <td class="px-4 sm:px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
                                 <div x-text="device.display_name"></div>
@@ -610,7 +612,7 @@
             </div>
             <!-- Device list -->
             <div class="max-h-60 overflow-y-auto space-y-2">
-                <template x-for="device in sortedDevices.filter(d => d.in_update || updatedDevices.includes(d.ip))" :key="'update-' + device.ip">
+                <template x-for="device in sortedDevices.filter(d => d.scanner_type !== 'eevx').filter(d => d.in_update || updatedDevices.includes(d.ip))" :key="'update-' + device.ip">
                     <div class="flex items-center gap-3 px-3 py-2 rounded-md bg-gray-900/40">
                         <!-- Status icon -->
                         <div class="flex-none">
