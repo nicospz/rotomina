@@ -9,15 +9,22 @@
 </form>
 <p class="mb-4">The server renews the account session automatically. Your password is used only for sign-in.</p>
 <form id="link" class="mb-6 flex gap-2 flex-wrap">
-<input name="ip" placeholder="ADB serial or host:port" required class="bg-gray-800 p-2 rounded">
-<input name="mapping_id" placeholder="Mapping device UUID" required class="bg-gray-800 p-2 rounded">
+<label>Mapping device
+<select id="available-devices" name="mapping_id" required class="bg-gray-800 p-2 rounded">
+<option value="">Connect your Mapping account to load devices</option>
+</select></label>
+<button type="button" id="reload-devices" class="bg-gray-700 p-2 rounded">Refresh device list</button>
+<details class="w-full"><summary>Optional ADB address</summary>
+<input name="ip" aria-label="Optional ADB serial or host:port" placeholder="ADB serial or host:port (optional)" class="bg-gray-800 p-2 rounded">
+<p>Leave blank to manage through Mapping. Existing ADB bindings are preserved.</p>
+</details>
 <button class="bg-blue-700 p-2 rounded">Link Eevx device</button>
 </form>
-<p class="mb-4">Link devices here before using other Rotomina controls. Linking does not start scanning. Server setup: configure a private writable session directory and the public Supabase API key.</p>
+<p class="mb-4">Choose a device from your Mapping account and link it. No ADB connection or UUID copying is needed. Linking does not start scanning.</p>
 <select id="device" class="bg-gray-800 p-2 rounded">
 <option value="">Select Eevx device</option>
 {% for device in devices if device.scanner_type == 'eevx' %}
-<option value="{{ device.ip }}">{{ device.display_name }} ({{ device.ip }})</option>
+<option value="{{ device.ip }}">{{ device.display_name }} ({{ device.eevx_device_id }})</option>
 {% endfor %}
 </select>
 <button id="refresh" class="bg-gray-700 p-2 rounded">Refresh</button>
@@ -51,6 +58,17 @@ async function call(path, body) {
  return data;
 }
 async function run(action) { try { el('message').textContent = ''; await action(); } catch(e) { el('message').textContent = e.message; } }
+async function loadDevices() {
+ const data = await call('devices');
+ const select = el('available-devices');
+ select.replaceChildren(new Option(data.devices.length ? 'Select a Mapping device' : 'No available Mapping devices', ''));
+ for (const device of data.devices) {
+  const option = new Option(device.name + ' · ' + device.id + (device.linked ? ' (linked)' : ''), device.id);
+  option.disabled = device.linked;
+  select.add(option);
+ }
+}
+el('reload-devices').onclick = () => run(loadDevices);
 async function refresh() {
  snapshot = null;
  const ip = el('device').value;
@@ -91,7 +109,7 @@ el('operation-status').onclick = () => run(async () => {
 el('account').onsubmit = event => { event.preventDefault(); run(async () => {
  const values = Object.fromEntries(new FormData(event.target));
  event.target.elements.password.value = '';
- try { await call('login', values); el('message').textContent = 'Mapping account connected. Session renewal is automatic.'; }
+ try { await call('login', values); await loadDevices(); el('message').textContent = 'Mapping account connected. Session renewal is automatic.'; }
  finally { values.password = ''; }
 }); };
 el('refresh').onclick = () => run(refresh);
@@ -106,6 +124,7 @@ el('configure').onsubmit = event => { event.preventDefault(); run(() => {
  return command(changes);
 }); };
 el('link').onsubmit = event => { event.preventDefault(); run(async () => { await call('bind', Object.fromEntries(new FormData(event.target))); location.reload(); }); };
+run(loadDevices);
 })();
 </script>
 {% endblock %}
